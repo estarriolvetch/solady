@@ -2,10 +2,10 @@
 pragma solidity ^0.8.4;
 
 /// @notice Simple single owner authorization mixin.
-/// @author Solady (https://github.com/vectorized/solady/blob/main/src/auth/OwnableRoles.sol)
-/// @dev While the ownable portion follows [EIP-173](https://eips.ethereum.org/EIPS/eip-173)
-/// for compatibility, the nomenclature for the 2-step ownership handover
-/// may be unique to this codebase.
+/// @author Solady (https://github.com/vectorized/solady/blob/main/src/auth/Ownable.sol)
+/// @dev While the ownable portion follows
+/// [EIP-173](https://eips.ethereum.org/EIPS/eip-173) for compatibility,
+/// the nomenclature for the 2-step ownership handover may be unique to this codebase.
 abstract contract Ownable {
     /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
     /*                       CUSTOM ERRORS                        */
@@ -19,15 +19,6 @@ abstract contract Ownable {
 
     /// @dev The `pendingOwner` does not have a valid handover request.
     error NoHandoverRequest();
-
-    /// @dev `bytes4(keccak256(bytes("Unauthorized()")))`.
-    uint256 private constant _UNAUTHORIZED_ERROR_SELECTOR = 0x82b42900;
-
-    /// @dev `bytes4(keccak256(bytes("NewOwnerIsZeroAddress()")))`.
-    uint256 private constant _NEW_OWNER_IS_ZERO_ADDRESS_ERROR_SELECTOR = 0x7448fbae;
-
-    /// @dev `bytes4(keccak256(bytes("NoHandoverRequest()")))`.
-    uint256 private constant _NO_HANDOVER_REQUEST_ERROR_SELECTOR = 0x6f5e8818;
 
     /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
     /*                           EVENTS                           */
@@ -62,7 +53,7 @@ abstract contract Ownable {
     /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
     /// @dev The owner slot is given by: `not(_OWNER_SLOT_NOT)`.
-    /// It is intentionally choosen to be a high value
+    /// It is intentionally chosen to be a high value
     /// to avoid collision with lower slots.
     /// The choice of manual storage layout is to enable compatibility
     /// with both regular and upgradeable contracts.
@@ -119,10 +110,17 @@ abstract contract Ownable {
         assembly {
             // If the caller is not the stored owner, revert.
             if iszero(eq(caller(), sload(not(_OWNER_SLOT_NOT)))) {
-                mstore(0x00, _UNAUTHORIZED_ERROR_SELECTOR)
+                mstore(0x00, 0x82b42900) // `Unauthorized()`.
                 revert(0x1c, 0x04)
             }
         }
+    }
+
+    /// @dev Returns how long a two-step ownership handover is valid for in seconds.
+    /// Override to return a different value if needed.
+    /// Made internal to conserve bytecode. Wrap it in a public function if needed.
+    function _ownershipHandoverValidFor() internal view virtual returns (uint64) {
+        return 48 * 3600;
     }
 
     /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
@@ -131,7 +129,13 @@ abstract contract Ownable {
 
     /// @dev Allows the owner to transfer the ownership to `newOwner`.
     function transferOwnership(address newOwner) public payable virtual onlyOwner {
-        if (newOwner == address(0)) revert NewOwnerIsZeroAddress();
+        /// @solidity memory-safe-assembly
+        assembly {
+            if iszero(shl(96, newOwner)) {
+                mstore(0x00, 0x7448fbae) // `NewOwnerIsZeroAddress()`.
+                revert(0x1c, 0x04)
+            }
+        }
         _setOwner(newOwner);
     }
 
@@ -141,13 +145,13 @@ abstract contract Ownable {
     }
 
     /// @dev Request a two-step ownership handover to the caller.
-    /// The request will be automatically expire in 48 hours (172800 seconds) by default.
+    /// The request will automatically expire in 48 hours (172800 seconds) by default.
     function requestOwnershipHandover() public payable virtual {
         unchecked {
-            uint256 expires = block.timestamp + ownershipHandoverValidFor();
+            uint256 expires = block.timestamp + _ownershipHandoverValidFor();
             /// @solidity memory-safe-assembly
             assembly {
-                // Compute and set the handover slot to 1.
+                // Compute and set the handover slot to `expires`.
                 mstore(0x0c, _HANDOVER_SLOT_SEED)
                 mstore(0x00, caller())
                 sstore(keccak256(0x0c, 0x20), expires)
@@ -181,18 +185,13 @@ abstract contract Ownable {
             let handoverSlot := keccak256(0x0c, 0x20)
             // If the handover does not exist, or has expired.
             if gt(timestamp(), sload(handoverSlot)) {
-                mstore(0x00, _NO_HANDOVER_REQUEST_ERROR_SELECTOR)
+                mstore(0x00, 0x6f5e8818) // `NoHandoverRequest()`.
                 revert(0x1c, 0x04)
             }
             // Set the handover slot to 0.
             sstore(handoverSlot, 0)
-            // Clean the upper 96 bits.
-            let newOwner := shr(96, mload(0x0c))
-            // Emit the {OwnershipTransferred} event.
-            log3(0, 0, _OWNERSHIP_TRANSFERRED_EVENT_SIGNATURE, caller(), newOwner)
-            // Store the new value.
-            sstore(not(_OWNER_SLOT_NOT), newOwner)
         }
+        _setOwner(pendingOwner);
     }
 
     /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
@@ -222,11 +221,6 @@ abstract contract Ownable {
             // Load the handover slot.
             result := sload(keccak256(0x0c, 0x20))
         }
-    }
-
-    /// @dev Returns how long a two-step ownership handover is valid for in seconds.
-    function ownershipHandoverValidFor() public view virtual returns (uint64) {
-        return 48 * 3600;
     }
 
     /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/

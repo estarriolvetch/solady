@@ -31,9 +31,9 @@ library Base64 {
                 // Offsetted by -1 byte so that the `mload` will load the character.
                 // We will rewrite the free memory pointer at `0x40` later with
                 // the allocated size.
-                // The magic constant 0x0230 will translate "-_" + "+/".
+                // The magic constant 0x0670 will turn "-_" into "+/".
                 mstore(0x1f, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef")
-                mstore(0x3f, sub("ghijklmnopqrstuvwxyz0123456789-_", mul(iszero(fileSafe), 0x0230)))
+                mstore(0x3f, xor("ghijklmnopqrstuvwxyz0123456789-_", mul(iszero(fileSafe), 0x0670)))
 
                 // Skip the first slot, which stores the length.
                 let ptr := add(result, 0x20)
@@ -45,35 +45,24 @@ library Base64 {
                     let input := mload(data)
 
                     // Write 4 bytes. Optimized for fewer stack operations.
-                    mstore8(ptr, mload(and(shr(18, input), 0x3F)))
-                    mstore8(add(ptr, 1), mload(and(shr(12, input), 0x3F)))
-                    mstore8(add(ptr, 2), mload(and(shr(6, input), 0x3F)))
-                    mstore8(add(ptr, 3), mload(and(input, 0x3F)))
+                    mstore8(0, mload(and(shr(18, input), 0x3F)))
+                    mstore8(1, mload(and(shr(12, input), 0x3F)))
+                    mstore8(2, mload(and(shr(6, input), 0x3F)))
+                    mstore8(3, mload(and(input, 0x3F)))
+                    mstore(ptr, mload(0x00))
 
                     ptr := add(ptr, 4) // Advance 4 bytes.
-
                     if iszero(lt(ptr, end)) { break }
                 }
-
-                let r := mod(dataLength, 3)
-
-                switch noPadding
-                case 0 {
-                    // Offset `ptr` and pad with '='. We can simply write over the end.
-                    mstore8(sub(ptr, iszero(iszero(r))), 0x3d) // Pad at `ptr - 1` if `r > 0`.
-                    mstore8(sub(ptr, shl(1, eq(r, 1))), 0x3d) // Pad at `ptr - 2` if `r == 1`.
-                    // Write the length of the string.
-                    mstore(result, encodedLength)
-                }
-                default {
-                    // Write the length of the string.
-                    mstore(result, sub(encodedLength, add(iszero(iszero(r)), eq(r, 1))))
-                }
-
-                // Allocate the memory for the string.
-                // Add 31 and mask with `not(31)` to round the
-                // free memory pointer up the next multiple of 32.
-                mstore(0x40, and(add(end, 31), not(31)))
+                mstore(0x40, add(end, 0x20)) // Allocate the memory.
+                // Equivalent to `o = [0, 2, 1][dataLength % 3]`.
+                let o := div(2, mod(dataLength, 3))
+                // Offset `ptr` and pad with '='. We can simply write over the end.
+                mstore(sub(ptr, o), shl(240, 0x3d3d))
+                // Set `o` to zero if there is padding.
+                o := mul(iszero(iszero(noPadding)), o)
+                mstore(sub(ptr, o), 0) // Zeroize the slot after the string.
+                mstore(result, sub(encodedLength, o)) // Store the length.
             }
         }
     }
@@ -94,7 +83,7 @@ library Base64 {
         result = encode(data, fileSafe, false);
     }
 
-    /// @dev Encodes base64 encoded `data`.
+    /// @dev Decodes base64 encoded `data`.
     ///
     /// Supports:
     /// - RFC 4648 (both standard and file-safe mode).
@@ -114,30 +103,31 @@ library Base64 {
             let dataLength := mload(data)
 
             if dataLength {
-                let end := add(data, dataLength)
                 let decodedLength := mul(shr(2, dataLength), 3)
 
-                switch and(dataLength, 3)
-                case 0 {
+                for {} 1 {} {
                     // If padded.
-                    // forgefmt: disable-next-item
-                    decodedLength := sub(
-                        decodedLength,
-                        add(eq(and(mload(end), 0xFF), 0x3d), eq(and(mload(end), 0xFFFF), 0x3d3d))
-                    )
-                }
-                default {
+                    if iszero(and(dataLength, 3)) {
+                        let t := xor(mload(add(data, dataLength)), 0x3d3d)
+                        // forgefmt: disable-next-item
+                        decodedLength := sub(
+                            decodedLength,
+                            add(iszero(byte(30, t)), iszero(byte(31, t)))
+                        )
+                        break
+                    }
                     // If non-padded.
                     decodedLength := add(decodedLength, sub(and(dataLength, 3), 1))
+                    break
                 }
-
                 result := mload(0x40)
 
-                // Write the length of the string.
+                // Write the length of the bytes.
                 mstore(result, decodedLength)
 
                 // Skip the first slot, which stores the length.
                 let ptr := add(result, 0x20)
+                let end := add(ptr, decodedLength)
 
                 // Load the table into the scratch space.
                 // Constants are optimized for smaller bytecode with zero gas overhead.
@@ -164,19 +154,12 @@ library Base64 {
                             ))
                         ))
                     ))
-
                     ptr := add(ptr, 3)
-
-                    if iszero(lt(data, end)) { break }
+                    if iszero(lt(ptr, end)) { break }
                 }
-
-                // Allocate the memory for the string.
-                // Add 32 + 31 and mask with `not(31)` to round the
-                // free memory pointer up the next multiple of 32.
-                mstore(0x40, and(add(add(result, decodedLength), 63), not(31)))
-
-                // Restore the zero slot.
-                mstore(0x60, 0)
+                mstore(0x40, add(end, 0x20)) // Allocate the memory.
+                mstore(end, 0) // Zeroize the slot after the bytes.
+                mstore(0x60, 0) // Restore the zero slot.
             }
         }
     }

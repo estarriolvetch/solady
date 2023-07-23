@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.4;
 
-import "./utils/TestPlus.sol";
+import "./utils/SoladyTest.sol";
 import {LibClone} from "../src/utils/LibClone.sol";
 import {Clone} from "../src/utils/Clone.sol";
 import {SafeTransferLib} from "../src/utils/SafeTransferLib.sol";
 
-contract LibCloneTest is TestPlus, Clone {
+contract LibCloneTest is SoladyTest, Clone {
     error CustomError(uint256 currentValue);
 
     event ReceiveETH(uint256 amount);
@@ -16,8 +16,8 @@ contract LibCloneTest is TestPlus, Clone {
     mapping(bytes32 => bool) saltIsUsed;
 
     function setUp() public {
-        // Mini test to check if `_this()` returns a word with brutalized upper 96 bits.
-        address t = _this();
+        // Mini test to check if `_thisBrutalized()` returns a word with brutalized upper 96 bits.
+        address t = _thisBrutalized();
         /// @solidity memory-safe-assembly
         assembly {
             if iszero(shr(160, t)) { revert(0, 0) }
@@ -77,7 +77,7 @@ contract LibCloneTest is TestPlus, Clone {
     }
 
     function testClone(uint256 value_) public {
-        address clone = LibClone.clone(_this());
+        address clone = LibClone.clone(_thisBrutalized());
         _shouldBehaveLikeClone(clone, value_);
     }
 
@@ -88,17 +88,29 @@ contract LibCloneTest is TestPlus, Clone {
     function testCloneDeterministic(uint256 value_, bytes32 salt) public {
         if (saltIsUsed[salt]) {
             vm.expectRevert(LibClone.DeploymentFailed.selector);
-            LibClone.cloneDeterministic(_this(), salt);
+            this.cloneDeterministic(_thisBrutalized(), salt);
             return;
         }
 
-        address clone = LibClone.cloneDeterministic(_this(), salt);
+        address clone = this.cloneDeterministic(_thisBrutalized(), salt);
         saltIsUsed[salt] = true;
 
         _shouldBehaveLikeClone(clone, value_);
 
-        address predicted = LibClone.predictDeterministicAddress(_this(), salt, _this());
+        address predicted =
+            LibClone.predictDeterministicAddress(_thisBrutalized(), salt, _thisBrutalized());
         assertEq(clone, predicted);
+    }
+
+    function cloneDeterministic(address implementation, bytes32 salt) external returns (address) {
+        return LibClone.cloneDeterministic(implementation, salt);
+    }
+
+    function cloneDeterministic(address implementation, bytes calldata data, bytes32 salt)
+        external
+        returns (address)
+    {
+        return LibClone.cloneDeterministic(implementation, data, salt);
     }
 
     function testCloneDeterministicRevertsIfAddressAlreadyUsed() public {
@@ -119,7 +131,42 @@ contract LibCloneTest is TestPlus, Clone {
     }
 
     function getArgUint256(uint256 argOffset) public pure returns (uint256) {
-        return _getArgUint256(argOffset);
+        uint256 result = _getArgUint256(argOffset);
+        unchecked {
+            require(bytes32(result) == _getArgBytes32(argOffset));
+            require(uint248(result) == _getArgUint248(argOffset + 1));
+            require(uint240(result) == _getArgUint240(argOffset + 2));
+            require(uint232(result) == _getArgUint232(argOffset + 3));
+            require(uint224(result) == _getArgUint224(argOffset + 4));
+            require(uint216(result) == _getArgUint216(argOffset + 5));
+            require(uint208(result) == _getArgUint208(argOffset + 6));
+            require(uint200(result) == _getArgUint200(argOffset + 7));
+            require(uint192(result) == _getArgUint192(argOffset + 8));
+            require(uint184(result) == _getArgUint184(argOffset + 9));
+            require(uint176(result) == _getArgUint176(argOffset + 10));
+            require(uint168(result) == _getArgUint168(argOffset + 11));
+            require(uint160(result) == _getArgUint160(argOffset + 12));
+            require(uint152(result) == _getArgUint152(argOffset + 13));
+            require(uint144(result) == _getArgUint144(argOffset + 14));
+            require(uint136(result) == _getArgUint136(argOffset + 15));
+            require(uint128(result) == _getArgUint128(argOffset + 16));
+            require(uint120(result) == _getArgUint120(argOffset + 17));
+            require(uint112(result) == _getArgUint112(argOffset + 18));
+            require(uint104(result) == _getArgUint104(argOffset + 19));
+            require(uint96(result) == _getArgUint96(argOffset + 20));
+            require(uint88(result) == _getArgUint88(argOffset + 21));
+            require(uint80(result) == _getArgUint80(argOffset + 22));
+            require(uint72(result) == _getArgUint72(argOffset + 23));
+            require(uint64(result) == _getArgUint64(argOffset + 24));
+            require(uint56(result) == _getArgUint56(argOffset + 25));
+            require(uint48(result) == _getArgUint48(argOffset + 26));
+            require(uint40(result) == _getArgUint40(argOffset + 27));
+            require(uint32(result) == _getArgUint32(argOffset + 28));
+            require(uint24(result) == _getArgUint24(argOffset + 29));
+            require(uint16(result) == _getArgUint16(argOffset + 30));
+            require(uint8(result) == _getArgUint8(argOffset + 31));
+        }
+        return result;
     }
 
     function getArgUint256Array(uint256 argOffset, uint256 length)
@@ -127,7 +174,10 @@ contract LibCloneTest is TestPlus, Clone {
         pure
         returns (uint256[] memory)
     {
-        return _getArgUint256Array(argOffset, length);
+        uint256[] memory result = _getArgUint256Array(argOffset, length);
+        bytes32 hash = keccak256(abi.encode(_getArgBytes32Array(argOffset, length)));
+        require(keccak256(abi.encode(result)) == hash);
+        return result;
     }
 
     function getArgUint64(uint256 argOffset) public pure returns (uint64) {
@@ -148,7 +198,7 @@ contract LibCloneTest is TestPlus, Clone {
     ) public brutalizeMemory {
         bytes memory data =
             abi.encodePacked(argAddress, argUint256, argUint256Array, argUint64, argUint8);
-        LibCloneTest clone = LibCloneTest(LibClone.clone(_this(), data));
+        LibCloneTest clone = LibCloneTest(LibClone.clone(_thisBrutalized(), data));
         _shouldBehaveLikeClone(address(clone), value_);
 
         // For avoiding stack too deep. Also, no risk of overflow.
@@ -204,7 +254,7 @@ contract LibCloneTest is TestPlus, Clone {
             bytes32 saltKey = keccak256(abi.encode(data, salt));
             if (saltIsUsed[saltKey]) {
                 vm.expectRevert(LibClone.DeploymentFailed.selector);
-                LibCloneTest(LibClone.cloneDeterministic(_this(), data, salt));
+                LibCloneTest(this.cloneDeterministic(_thisBrutalized(), data, salt));
                 return;
             }
             saltIsUsed[saltKey] = true;
@@ -212,7 +262,7 @@ contract LibCloneTest is TestPlus, Clone {
 
         bytes32 dataHashBefore = keccak256(data);
 
-        LibCloneTest clone = LibCloneTest(LibClone.cloneDeterministic(_this(), data, salt));
+        LibCloneTest clone = LibCloneTest(this.cloneDeterministic(_thisBrutalized(), data, salt));
         // Check that memory management is done properly.
         assertEq(keccak256(data), dataHashBefore);
 
@@ -240,7 +290,9 @@ contract LibCloneTest is TestPlus, Clone {
         }
 
         {
-            address predicted = LibClone.predictDeterministicAddress(_this(), data, salt, _this());
+            address predicted = LibClone.predictDeterministicAddress(
+                _thisBrutalized(), data, salt, _thisBrutalized()
+            );
             assertEq(address(clone), predicted);
         }
 
@@ -266,7 +318,25 @@ contract LibCloneTest is TestPlus, Clone {
         );
     }
 
-    function _this() internal view returns (address result) {
+    function testStartsWithCaller(uint256) public {
+        uint256 noise = _random() >> 160;
+        this.checkStartsWithCaller(bytes32(noise));
+
+        uint256 r = _random();
+        address randomCaller = address(uint160(r));
+        if (randomCaller == msg.sender) return;
+        if (randomCaller == address(0)) return;
+        vm.expectRevert(LibClone.SaltDoesNotStartWithCaller.selector);
+        this.checkStartsWithCaller(bytes32((r << 96) | noise));
+
+        this.checkStartsWithCaller(bytes32((uint256(uint160(address(this))) << 96) | noise));
+    }
+
+    function checkStartsWithCaller(bytes32 salt) public view {
+        LibClone.checkStartsWithCaller(salt);
+    }
+
+    function _thisBrutalized() internal view returns (address result) {
         /// @solidity memory-safe-assembly
         assembly {
             result := or(shl(160, add(timestamp(), 123456789)), address())

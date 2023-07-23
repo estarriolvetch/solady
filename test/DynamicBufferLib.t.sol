@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.4;
 
-import "./utils/TestPlus.sol";
+import "./utils/SoladyTest.sol";
 import {DynamicBufferLib} from "../src/utils/DynamicBufferLib.sol";
 
-contract DynamicBufferLibTest is TestPlus {
+contract DynamicBufferLibTest is SoladyTest {
     using DynamicBufferLib for DynamicBufferLib.DynamicBuffer;
 
     function testDynamicBuffer(bytes[] memory inputs, uint256 randomness) public brutalizeMemory {
         _boundInputs(inputs);
 
-        _roundUpFreeMemoryPointer();
+        _misalignFreeMemoryPointer();
         DynamicBufferLib.DynamicBuffer memory buffer;
         unchecked {
             uint256 expectedLength;
@@ -27,21 +27,20 @@ contract DynamicBufferLibTest is TestPlus {
                 // Manually store the randomness in the next free memory word,
                 // and then check if append will corrupt it
                 // (in the case of insufficient memory allocation).
-                uint256 corruptCheck;
+                uint256 corruptCheckSlot;
                 /// @solidity memory-safe-assembly
                 assembly {
-                    corruptCheck := mload(0x40)
-                    mstore(corruptCheck, randomness)
-                    mstore(0x40, add(corruptCheck, 0x20))
+                    corruptCheckSlot := mload(0x40)
+                    mstore(corruptCheckSlot, randomness)
+                    mstore(0x40, add(corruptCheckSlot, 0x20))
                 }
                 buffer.append(inputs[i]);
                 assertEq(buffer.data.length, expectedLength);
-                _brutalizeFreeMemoryStart();
-                _checkZeroRightPadded(buffer.data);
+                _checkMemory(buffer.data);
                 bool isCorrupted;
                 /// @solidity memory-safe-assembly
                 assembly {
-                    isCorrupted := iszero(eq(randomness, mload(corruptCheck)))
+                    isCorrupted := iszero(eq(randomness, mload(corruptCheckSlot)))
                 }
                 assertFalse(isCorrupted);
             }
@@ -77,6 +76,36 @@ contract DynamicBufferLibTest is TestPlus {
             }
         }
         assertEq(keccak256(buffer.data), joinedHash);
+    }
+
+    function testDynamicBufferChaining() public {
+        DynamicBufferLib.DynamicBuffer memory bufferA;
+        DynamicBufferLib.DynamicBuffer memory bufferB;
+        bufferA = bufferB.append("0", "1");
+        _checkSamePointers(bufferA, bufferB);
+        bufferA = bufferB.append("0", "1", "2");
+        _checkSamePointers(bufferA, bufferB);
+        bufferA = bufferB.append("0", "1", "2", "3");
+        _checkSamePointers(bufferA, bufferB);
+        bufferA = bufferB.append("0", "1", "2", "3", "4");
+        _checkSamePointers(bufferA, bufferB);
+        bufferA = bufferB.append("0", "1", "2", "3", "4", "5");
+        _checkSamePointers(bufferA, bufferB);
+        bufferA = bufferB.append("0", "1", "2", "3", "4", "5", "6");
+        _checkSamePointers(bufferA, bufferB);
+        assertEq(bufferA.data, "010120123012340123450123456");
+        assertEq(bufferB.data, "010120123012340123450123456");
+    }
+
+    function _checkSamePointers(
+        DynamicBufferLib.DynamicBuffer memory a,
+        DynamicBufferLib.DynamicBuffer memory b
+    ) internal {
+        bool isSamePointer;
+        assembly {
+            isSamePointer := eq(a, b)
+        }
+        assertTrue(isSamePointer);
     }
 
     function _getChunks() internal pure returns (bytes[] memory chunks, bytes32 joinedHash) {

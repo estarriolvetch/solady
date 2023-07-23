@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.4;
 
-import {WETH} from "solmate/tokens/WETH.sol";
+import {WETH} from "../src/tokens/WETH.sol";
 import {MockERC20} from "./utils/mocks/MockERC20.sol";
-import {MockAuthChild} from "./utils/mocks/MockAuthChild.sol";
+import {MockCd} from "./utils/mocks/MockCd.sol";
 
 import {CREATE3} from "../src/utils/CREATE3.sol";
 
-import "forge-std/Test.sol";
+import "./utils/SoladyTest.sol";
 
-contract CREATE3Test is Test {
+contract CREATE3Test is SoladyTest {
     function testDeployERC20() public {
         bytes32 salt = keccak256(bytes("A salt!"));
 
         MockERC20 deployed = MockERC20(
-            CREATE3.deploy(
+            this.deploy(
                 salt,
                 abi.encodePacked(type(MockERC20).creationCode, abi.encode("Mock Token", "MOCK", 18)),
                 0
@@ -40,27 +40,27 @@ contract CREATE3Test is Test {
     function testDoubleDeploySameBytecodeReverts() public {
         bytes32 salt = keccak256(bytes("Salty..."));
 
-        CREATE3.deploy(salt, type(MockAuthChild).creationCode, 0);
+        this.deploy(salt, type(MockCd).creationCode, 0);
         vm.expectRevert(CREATE3.DeploymentFailed.selector);
-        CREATE3.deploy(salt, type(MockAuthChild).creationCode, 0);
+        this.deploy(salt, type(MockCd).creationCode, 0);
     }
 
     function testDoubleDeployDifferentBytecodeReverts() public {
         bytes32 salt = keccak256(bytes("and sweet!"));
 
-        CREATE3.deploy(salt, type(WETH).creationCode, 0);
+        this.deploy(salt, type(WETH).creationCode, 0);
         vm.expectRevert(CREATE3.DeploymentFailed.selector);
-        CREATE3.deploy(salt, type(MockAuthChild).creationCode, 0);
+        this.deploy(salt, type(MockCd).creationCode, 0);
     }
 
-    function testFuzzDeployERC20(
+    function testDeployERC20(
         bytes32 salt,
         string calldata name,
         string calldata symbol,
         uint8 decimals
     ) public {
         MockERC20 deployed = MockERC20(
-            CREATE3.deploy(
+            this.deploy(
                 salt,
                 abi.encodePacked(type(MockERC20).creationCode, abi.encode(name, symbol, decimals)),
                 0
@@ -74,23 +74,28 @@ contract CREATE3Test is Test {
         assertEq(deployed.decimals(), decimals);
     }
 
-    function testFuzzDoubleDeploySameBytecodeReverts(bytes32 salt, bytes calldata bytecode)
-        public
-    {
+    function testDoubleDeploySameBytecodeReverts(bytes32 salt, bytes calldata bytecode) public {
         bytes memory creationCode = _creationCode(bytecode);
-        CREATE3.deploy(salt, creationCode, 0);
+        this.deploy(salt, creationCode, 0);
         vm.expectRevert(CREATE3.DeploymentFailed.selector);
-        CREATE3.deploy(salt, creationCode, 0);
+        this.deploy(salt, creationCode, 0);
     }
 
-    function testFuzzDoubleDeployDifferentBytecodeReverts(
+    function testDoubleDeployDifferentBytecodeReverts(
         bytes32 salt,
         bytes memory bytecode1,
         bytes memory bytecode2
     ) public {
-        CREATE3.deploy(salt, _creationCode(bytecode1), 0);
+        this.deploy(salt, _creationCode(bytecode1), 0);
         vm.expectRevert(CREATE3.DeploymentFailed.selector);
-        CREATE3.deploy(salt, _creationCode(bytecode2), 0);
+        this.deploy(salt, _creationCode(bytecode2), 0);
+    }
+
+    function deploy(bytes32 salt, bytes calldata creationCode, uint256 value)
+        external
+        returns (address)
+    {
+        return CREATE3.deploy(salt, creationCode, value);
     }
 
     function _creationCode(bytes memory bytecode) internal pure returns (bytes memory result) {
@@ -104,7 +109,7 @@ contract CREATE3Test is Test {
             result := mload(0x40)
             length := mload(bytecode)
             let dataSize := add(length, 1)
-            mstore(0x40, and(add(add(result, dataSize), 0x60), not(31)))
+            mstore(0x40, and(add(add(result, dataSize), 0x60), not(0x1f)))
             mstore(add(result, 0x0b), or(0x61000080600a3d393df300, shl(0x40, dataSize)))
             mstore(result, add(dataSize, 0xa)) // Store the length of result.
             // Copy the bytes over.

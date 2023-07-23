@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.4;
 
-import "./utils/TestPlus.sol";
+import "./utils/SoladyTest.sol";
 import "./utils/mocks/MockOwnableRoles.sol";
 
-contract OwnableRolesTest is TestPlus {
+contract OwnableRolesTest is SoladyTest {
     event OwnershipTransferred(address indexed oldOwner, address indexed newOwner);
 
     event OwnershipHandoverRequested(address indexed pendingOwner);
@@ -17,6 +17,12 @@ contract OwnableRolesTest is TestPlus {
 
     function setUp() public {
         mockOwnableRoles = new MockOwnableRoles();
+    }
+
+    function testBytecodeSize() public {
+        MockOwnableRolesBytecodeSizer mock = new MockOwnableRolesBytecodeSizer();
+        assertTrue(address(mock).code.length > 0);
+        assertEq(mock.owner(), address(this));
     }
 
     function testInitializeOwnerDirect() public {
@@ -43,6 +49,23 @@ contract OwnableRolesTest is TestPlus {
         assertEq(mockOwnableRoles.rolesOf(user), rolesToGrant);
         mockOwnableRoles.removeRolesDirect(user, rolesToRemove);
         assertEq(mockOwnableRoles.rolesOf(user), rolesToGrant ^ (rolesToGrant & rolesToRemove));
+    }
+
+    function testSetRolesDirect(uint256) public {
+        address userA = _randomNonZeroAddress();
+        address userB = _randomNonZeroAddress();
+        while (userA == userB) userA = _randomNonZeroAddress();
+        for (uint256 t; t != 2; ++t) {
+            uint256 rolesA = _random();
+            uint256 rolesB = _random();
+            vm.expectEmit(true, true, true, true);
+            emit RolesUpdated(userA, rolesA);
+            mockOwnableRoles.setRolesDirect(userA, rolesA);
+            emit RolesUpdated(userB, rolesB);
+            mockOwnableRoles.setRolesDirect(userB, rolesB);
+            assertEq(mockOwnableRoles.rolesOf(userA), rolesA);
+            assertEq(mockOwnableRoles.rolesOf(userB), rolesB);
+        }
     }
 
     function testSetOwnerDirect() public {

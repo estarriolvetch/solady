@@ -10,6 +10,14 @@ library SSTORE2 {
     uint256 internal constant DATA_OFFSET = 1; // We skip the first byte as it's a STOP opcode to ensure the contract can't be called.
 
     /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+    /*                         CONSTANTS                          */
+    /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+    /// @dev We skip the first byte as it's a STOP opcode,
+    /// which ensures the contract can't be called.
+    uint256 internal constant DATA_OFFSET = 1;
+
+    /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
     /*                        CUSTOM ERRORS                       */
     /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
 
@@ -28,7 +36,6 @@ library SSTORE2 {
 
     /// @dev Writes `data` into the bytecode of a storage contract and returns its address.
     function write(bytes memory data) internal returns (address pointer) {
-        // Note: The assembly block below does not expand the memory.
         /// @solidity memory-safe-assembly
         assembly {
             let originalDataLength := mload(data)
@@ -45,7 +52,7 @@ library SSTORE2 {
              * 60 0xa      | PUSH1 0xa       | 0xa codeSize codeSize   |                     |
              * 3D          | RETURNDATASIZE  | 0 0xa codeSize codeSize |                     |
              * 39          | CODECOPY        | codeSize                | [0..codeSize): code |
-             * 3D          | RETURNDATASZIE  | 0 codeSize              | [0..codeSize): code |
+             * 3D          | RETURNDATASIZE  | 0 codeSize              | [0..codeSize): code |
              * F3          | RETURN          |                         | [0..codeSize): code |
              * 00          | STOP            |                         |                     |
              * ------------------------------------------------------------------------------+
@@ -77,6 +84,73 @@ library SSTORE2 {
         }
     }
 
+    /// @dev Writes `data` into the bytecode of a storage contract with `salt`
+    /// and returns its deterministic address.
+    function writeDeterministic(bytes memory data, bytes32 salt)
+        internal
+        returns (address pointer)
+    {
+        /// @solidity memory-safe-assembly
+        assembly {
+            let originalDataLength := mload(data)
+            let dataSize := add(originalDataLength, DATA_OFFSET)
+
+            mstore(data, or(0x61000080600a3d393df300, shl(0x40, dataSize)))
+
+            // Deploy a new contract with the generated creation code.
+            pointer := create2(0, add(data, 0x15), add(dataSize, 0xa), salt)
+
+            // If `pointer` is zero, revert.
+            if iszero(pointer) {
+                // Store the function selector of `DeploymentFailed()`.
+                mstore(0x00, 0x30116425)
+                // Revert with (offset, size).
+                revert(0x1c, 0x04)
+            }
+
+            // Restore original length of the variable size `data`.
+            mstore(data, originalDataLength)
+        }
+    }
+
+    /// @dev Returns the initialization code hash of the storage contract for `data`.
+    /// Used for mining vanity addresses with create2crunch.
+    function initCodeHash(bytes memory data) internal pure returns (bytes32 hash) {
+        /// @solidity memory-safe-assembly
+        assembly {
+            let originalDataLength := mload(data)
+            let dataSize := add(originalDataLength, DATA_OFFSET)
+
+            mstore(data, or(0x61000080600a3d393df300, shl(0x40, dataSize)))
+
+            hash := keccak256(add(data, 0x15), add(dataSize, 0xa))
+
+            // Restore original length of the variable size `data`.
+            mstore(data, originalDataLength)
+        }
+    }
+
+    /// @dev Returns the address of the storage contract for `data`
+    /// deployed with `salt` by `deployer`.
+    function predictDeterministicAddress(bytes memory data, bytes32 salt, address deployer)
+        internal
+        pure
+        returns (address predicted)
+    {
+        bytes32 hash = initCodeHash(data);
+        /// @solidity memory-safe-assembly
+        assembly {
+            // Compute and store the bytecode hash.
+            mstore8(0x00, 0xff) // Write the prefix.
+            mstore(0x35, hash)
+            mstore(0x01, shl(96, deployer))
+            mstore(0x15, salt)
+            predicted := keccak256(0x00, 0x55)
+            // Restore the part of the free memory pointer that has been overwritten.
+            mstore(0x35, 0)
+        }
+    }
+
     /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
     /*                         READ LOGIC                         */
     /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
@@ -93,7 +167,7 @@ library SSTORE2 {
                 revert(0x1c, 0x04)
             }
             // Offset all indices by 1 to skip the STOP opcode.
-            let size := sub(pointerCodesize, 1)
+            let size := sub(pointerCodesize, DATA_OFFSET)
 
             // Get the pointer to the free memory and allocate
             // enough 32-byte words for the data and the length of the data,
@@ -103,7 +177,7 @@ library SSTORE2 {
             mstore(0x40, add(data, and(add(size, 0x3f), 0xffe0)))
             mstore(data, size)
             mstore(add(add(data, 0x20), size), 0) // Zeroize the last slot.
-            extcodecopy(pointer, add(data, 0x20), 1, size)
+            extcodecopy(pointer, add(data, 0x20), DATA_OFFSET, size)
         }
     }
 
@@ -121,14 +195,14 @@ library SSTORE2 {
             }
 
             // If `!(pointer.code.size > start)`, reverts.
-            // This also handles the case where `start + 1` overflows.
+            // This also handles the case where `start + DATA_OFFSET` overflows.
             if iszero(gt(pointerCodesize, start)) {
                 // Store the function selector of `ReadOutOfBounds()`.
                 mstore(0x00, 0x84eb0dd1)
                 // Revert with (offset, size).
                 revert(0x1c, 0x04)
             }
-            let size := sub(pointerCodesize, add(start, 1))
+            let size := sub(pointerCodesize, add(start, DATA_OFFSET))
 
             // Get the pointer to the free memory and allocate
             // enough 32-byte words for the data and the length of the data,
@@ -138,7 +212,7 @@ library SSTORE2 {
             mstore(0x40, add(data, and(add(size, 0x3f), 0xffe0)))
             mstore(data, size)
             mstore(add(add(data, 0x20), size), 0) // Zeroize the last slot.
-            extcodecopy(pointer, add(data, 0x20), add(start, 1), size)
+            extcodecopy(pointer, add(data, 0x20), add(start, DATA_OFFSET), size)
         }
     }
 
@@ -160,7 +234,8 @@ library SSTORE2 {
             }
 
             // If `!(pointer.code.size > end) || (start > end)`, revert.
-            // This also handles the cases where `end + 1` or `start + 1` overflow.
+            // This also handles the cases where
+            // `end + DATA_OFFSET` or `start + DATA_OFFSET` overflows.
             if iszero(
                 and(
                     gt(pointerCodesize, end), // Within bounds.
@@ -182,7 +257,7 @@ library SSTORE2 {
             mstore(0x40, add(data, and(add(size, 0x3f), 0xffe0)))
             mstore(data, size)
             mstore(add(add(data, 0x20), size), 0) // Zeroize the last slot.
-            extcodecopy(pointer, add(data, 0x20), add(start, 1), size)
+            extcodecopy(pointer, add(data, 0x20), add(start, DATA_OFFSET), size)
         }
     }
 }

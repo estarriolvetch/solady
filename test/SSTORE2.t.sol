@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.4;
 
-import "./utils/TestPlus.sol";
+import "./utils/SoladyTest.sol";
 import {SSTORE2} from "../src/utils/SSTORE2.sol";
 
-contract SSTORE2Test is TestPlus {
+contract SSTORE2Test is SoladyTest {
     function testWriteRead() public {
         bytes memory testBytes = abi.encode("this is a test");
 
@@ -68,15 +68,14 @@ contract SSTORE2Test is TestPlus {
         SSTORE2.read(pointer, 41000, 42000);
     }
 
-    function testFuzzWriteRead(bytes calldata testBytes) public brutalizeMemory {
-        _roundUpFreeMemoryPointer();
+    function testWriteRead(bytes calldata testBytes) public brutalizeMemory {
+        _misalignFreeMemoryPointer();
         bytes memory readResult = SSTORE2.read(SSTORE2.write(testBytes));
-        _brutalizeFreeMemoryStart();
-        _checkZeroRightPadded(readResult);
+        _checkMemory(readResult);
         assertEq(readResult, testBytes);
     }
 
-    function testFuzzWriteReadCustomStartBound(bytes calldata testBytes, uint256 startIndex)
+    function testWriteReadCustomStartBound(bytes calldata testBytes, uint256 startIndex)
         public
         brutalizeMemory
     {
@@ -84,14 +83,13 @@ contract SSTORE2Test is TestPlus {
 
         startIndex = _bound(startIndex, 0, testBytes.length);
 
-        _roundUpFreeMemoryPointer();
+        _misalignFreeMemoryPointer();
         bytes memory readResult = SSTORE2.read(SSTORE2.write(testBytes), startIndex);
-        _brutalizeFreeMemoryStart();
-        _checkZeroRightPadded(readResult);
+        _checkMemory(readResult);
         assertEq(readResult, bytes(testBytes[startIndex:]));
     }
 
-    function testFuzzWriteReadCustomBounds(
+    function testWriteReadCustomBounds(
         bytes calldata testBytes,
         uint256 startIndex,
         uint256 endIndex
@@ -103,20 +101,19 @@ contract SSTORE2Test is TestPlus {
 
         if (startIndex > endIndex) return;
 
-        _roundUpFreeMemoryPointer();
+        _misalignFreeMemoryPointer();
         bytes memory readResult = SSTORE2.read(SSTORE2.write(testBytes), startIndex, endIndex);
-        _brutalizeFreeMemoryStart();
-        _checkZeroRightPadded(readResult);
+        _checkMemory(readResult);
         assertEq(readResult, bytes(testBytes[startIndex:endIndex]));
     }
 
-    function testFuzzReadInvalidPointerRevert(address pointer) public brutalizeMemory {
+    function testReadInvalidPointerRevert(address pointer) public brutalizeMemory {
         if (pointer.code.length > 0) return;
         vm.expectRevert(SSTORE2.InvalidPointer.selector);
         SSTORE2.read(pointer);
     }
 
-    function testFuzzReadInvalidPointerCustomStartBoundReverts(address pointer, uint256 startIndex)
+    function testReadInvalidPointerCustomStartBoundReverts(address pointer, uint256 startIndex)
         public
         brutalizeMemory
     {
@@ -125,7 +122,7 @@ contract SSTORE2Test is TestPlus {
         SSTORE2.read(pointer, startIndex);
     }
 
-    function testFuzzReadInvalidPointerCustomBoundsReverts(
+    function testReadInvalidPointerCustomBoundsReverts(
         address pointer,
         uint256 startIndex,
         uint256 endIndex
@@ -135,7 +132,7 @@ contract SSTORE2Test is TestPlus {
         SSTORE2.read(pointer, startIndex, endIndex);
     }
 
-    function testFuzzWriteReadCustomStartBoundOutOfRangeReverts(
+    function testWriteReadCustomStartBoundOutOfRangeReverts(
         bytes calldata testBytes,
         uint256 startIndex
     ) public brutalizeMemory {
@@ -145,7 +142,7 @@ contract SSTORE2Test is TestPlus {
         SSTORE2.read(pointer, startIndex);
     }
 
-    function testFuzzWriteReadCustomBoundsOutOfRangeReverts(
+    function testWriteReadCustomBoundsOutOfRangeReverts(
         bytes calldata testBytes,
         uint256 startIndex,
         uint256 endIndex
@@ -154,5 +151,22 @@ contract SSTORE2Test is TestPlus {
         address pointer = SSTORE2.write(testBytes);
         vm.expectRevert(SSTORE2.ReadOutOfBounds.selector);
         SSTORE2.read(pointer, startIndex, endIndex);
+    }
+
+    function testWriteReadDeterministic(bytes calldata testBytes) public brutalizeMemory {
+        bytes32 salt = bytes32(_random());
+        address deployer = address(this);
+        if (_random() % 8 == 0) {
+            (deployer,) = _randomSigner();
+        }
+        vm.prank(deployer);
+        address deterministicPointer = SSTORE2.writeDeterministic(testBytes, salt);
+        assertEq(SSTORE2.read(deterministicPointer), testBytes);
+        assertEq(
+            SSTORE2.predictDeterministicAddress(testBytes, salt, deployer), deterministicPointer
+        );
+
+        address pointer = SSTORE2.write(testBytes);
+        assertEq(pointer.code, deterministicPointer.code);
     }
 }
